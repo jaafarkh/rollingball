@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kinetic and Potential Energy Simulator</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 20px;
+            background-color: #f0f2f5;
+            color: #333;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        label {
+            font-weight: bold;
+            font-size: 14px;
+        }
+        input[type="range"] {
+            width: 100%;
+        }
+        .readout {
+            font-family: monospace;
+            font-size: 13px;
+            color: #666;
+        }
+        canvas {
+            width: 100%;
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            display: block;
+        }
+        .button-group {
+            grid-column: span 2;
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            background-color: #007bff;
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button.secondary {
+            background-color: #6c757d;
+        }
+        button.secondary:hover {
+            background-color: #545b62;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Rolling Ball: Kinetic and Potential Energy Simulator</h2>
+    
+    <div class="controls">
+        <div class="control-group">
+            <label for="heightSlider">Dish Edge Height (m): <span id="heightVal">3.0</span></label>
+            <input type="range" id="heightSlider" min="1" max="5" step="0.1" value="3.0">
+            <span class="readout">Changes the depth/height of the concave dish.</span>
+        </div>
+        
+        <div class="control-group">
+            <label for="frictionSlider">Friction (Coefficient): <span id="frictionVal">0.000</span></label>
+            <input type="range" id="frictionSlider" min="0" max="0.05" step="0.001" value="0.000">
+            <span class="readout">Simulates surface drag on the rolling ball.</span>
+        </div>
+
+        <div class="button-group">
+            <button id="resetBtn">Reset Ball</button>
+            <button id="pauseBtn" class="secondary">Pause</button>
+        </div>
+    </div>
+
+    <canvas id="simCanvas" width="800" height="400"></canvas>
+</div>
+
+<script>
+const canvas = document.getElementById('simCanvas');
+const ctx = canvas.getContext('2d');
+
+// DOM Elements
+const heightSlider = document.getElementById('heightSlider');
+const heightVal = document.getElementById('heightVal');
+const frictionSlider = document.getElementById('frictionSlider');
+const frictionVal = document.getElementById('frictionVal');
+const resetBtn = document.getElementById('resetBtn');
+const pauseBtn = document.getElementById('pauseBtn');
+
+// Physics constants
+const g = 9.81; 
+const ballMass = 1; 
+const metersToPixels = 60; 
+const centerX = 400; 
+const groundY = 350; 
+
+// Simulation State
+let dishHeight = parseFloat(heightSlider.value);
+let frictionCoef = parseFloat(frictionSlider.value);
+let isPaused = false;
+
+const maxX = 4;
+let ballX = -maxX; 
+let totalVelocity = 0; // Tracking overall particle velocity along the curve arc directly
+
+function getPathY(x) {
+    const a = dishHeight / (maxX * maxX);
+    return a * x * x;
+}
+
+function getSlopeAngle(x) {
+    const a = dishHeight / (maxX * maxX);
+    const dydx = 2 * a * x;
+    return Math.atan(dydx);
+}
+
+function updatePhysics() {
+    if (isPaused) return;
+
+    const dt = 0.016; // Time step (~60 FPS)
+    const slopeAngle = getSlopeAngle(ballX);
+
+    // 1. Acceleration along the curve path: a = -g * sin(theta)
+    let accelerationSlope = -g * Math.sin(slopeAngle);
+
+    // 2. Apply Friction opposing particle path velocity direction
+    if (Math.abs(totalVelocity) > 0.001) {
+        const frictionDecel = frictionCoef * g * Math.cos(slopeAngle);
+        accelerationSlope -= Math.sign(totalVelocity) * frictionDecel;
+    }
+
+    // Update overall particle velocity along the track
+    totalVelocity += accelerationSlope * dt;
+
+    // 3. Resolve x-direction velocity via multiplication by cos(theta) as suggested
+    const vx = totalVelocity * Math.cos(slopeAngle);
+    ballX += vx * dt;
+
+    // 4. Perfect Turning Point / Boundary Handling via Energy Conservation boundaries
+    const currentY = getPathY(ballX);
+    const maxTheoreticalPE = ballMass * g * dishHeight; 
+    
+    // Safety check: ensure precision errors don't cause velocity sign locks at peaks
+    if (Math.abs(ballX) >= maxX) {
+        ballX = Math.sign(ballX) * maxX;
+        totalVelocity = 0;
+    }
+    
+    // Dynamic swing boundary correction if turning sign mismatch happens at peak heights
+    if (totalVelocity > 0 && ballX > 0 && (ballMass * g * currentY) >= maxTheoreticalPE - 0.01) {
+        totalVelocity = 0; 
+    } else if (totalVelocity < 0 && ballX < 0 && (ballMass * g * currentY) >= maxTheoreticalPE - 0.01) {
+        totalVelocity = 0;
+    }
+}
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 1. Grid Background
+    ctx.strokeStyle = '#e9ecef';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < canvas.height; i += 20) {
+        ctx.beginPath();
+        ctx.moveTo(0, i);
+        ctx.lineTo(canvas.width, i);
+        ctx.stroke();
+    }
+
+    // 2. Draw Parabolic Concave Dish
+    ctx.strokeStyle = '#495057';
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+	let dx = maxX/50;
+	var x,i;
+    for (i = 0; i <= 100; i++) {
+	    x = -maxX + i*dx;
+        const y = getPathY(x);
+        const canvasX = centerX + x * metersToPixels;
+        const canvasY = groundY - y * metersToPixels;
+        if (x === -maxX) ctx.moveTo(canvasX, canvasY);
+        else ctx.lineTo(canvasX, canvasY);
+    }
+    ctx.stroke();
+
+    // 3. Calculate Accurate Kinetic and Potential Energy
+    const currentY = getPathY(ballX);
+    
+    // Calculate Energies safely 
+    const pe = ballMass * g * currentY;
+	var ke;
+	if (frictionCoef > 0) {
+        ke = 0.5 * ballMass * totalVelocity * totalVelocity;
+    }else{
+	    ke = ballMass * g * dishHeight - pe;//fixed total energy 
+	}
+    
+    
+    // Clean up floating point display variations precisely at the peaks
+    if (Math.abs(totalVelocity) < 0.02) {
+        ke = 0.00;
+    }
+    const displayTotalEnergy = pe + ke;
+
+    // 4. Draw Ball Graphics
+    const ballCanvasX = centerX + ballX * metersToPixels;
+    const ballCanvasY = groundY - currentY * metersToPixels;
+    
+    ctx.fillStyle = '#dc3545';
+    ctx.beginPath();
+    ctx.arc(ballCanvasX, ballCanvasY - 10, 10, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // 5. Render Dynamic Energy Bars
+    const barX = 0.85*canvas.width;
+    const barY = 60;
+    const barWidth = 30;
+    const maxBarHeight = 140;
+    const maxPossiblePE = ballMass * g * 5.0; 
+    const energyScale = maxBarHeight / maxPossiblePE;
+
+    const peHeight = Math.max(0, pe * energyScale);
+    ctx.fillStyle = '#007bff';
+    ctx.fillRect(barX, barY + (maxBarHeight - peHeight), barWidth, peHeight);
+
+    const keHeight = Math.max(0, ke * energyScale);
+    ctx.fillStyle = '#28a745';
+    ctx.fillRect(barX + 45, barY + (maxBarHeight - keHeight), barWidth, keHeight);
+
+    ctx.fillStyle = '#333';
+    ctx.font = '12px sans-serif';
+    ctx.fillText('PE', barX + 6, barY + maxBarHeight + 15);
+    ctx.fillText('KE', barX + 51, barY + maxBarHeight + 15);
+
+    // Real-time Metrics Dashboard Display
+    ctx.font = 'bold 14px sans-serif';
+    ctx.fillStyle = '#007bff';
+    ctx.fillText(`Potential Energy (PE): ${pe.toFixed(2)} J`, 30, 50);
+    ctx.fillStyle = '#28a745';
+    ctx.fillText(`Kinetic Energy (KE): ${ke.toFixed(2)} J`, 30, 70);
+    ctx.fillStyle = '#333';
+    ctx.font = '13px sans-serif';
+    ctx.fillText(`Total Mechanical Energy: ${displayTotalEnergy.toFixed(2)} J`, 30, 95);
+    ctx.fillText(`Current Height: ${currentY.toFixed(2)} m`, 30, 115);
+    ctx.fillText(`Total Particle Velocity: ${Math.abs(totalVelocity).toFixed(2)} m/s`, 30, 135);
+}
+
+function simLoop() {
+    updatePhysics();
+    draw();
+    requestAnimationFrame(simLoop);
+}
+
+// Controller Event Hookups
+heightSlider.addEventListener('input', (e) => {
+    dishHeight = parseFloat(e.target.value);
+    heightVal.textContent = dishHeight.toFixed(1);
+    ballX = -maxX;
+    totalVelocity = 0;
+});
+
+frictionSlider.addEventListener('input', (e) => {
+    frictionCoef = parseFloat(e.target.value);
+    frictionVal.textContent = frictionCoef.toFixed(3);
+});
+
+resetBtn.addEventListener('click', () => {
+    ballX = -maxX;
+    totalVelocity = 0;
+});
+
+pauseBtn.addEventListener('click', () => {
+    isPaused = !isPaused;
+    pauseBtn.textContent = isPaused ? 'Resume' : 'Pause';
+    pauseBtn.classList.toggle('secondary');
+});
+
+simLoop();
+</script>
+
+</body>
+</html>
